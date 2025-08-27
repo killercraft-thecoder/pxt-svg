@@ -5,6 +5,7 @@ class SVGParser {
     private viewBoxW: number;
     private viewBoxH: number;
     private SmoothCurveAccuracy = 10;
+    private TextHeight = 0;
 
     constructor(svgText: string, SmoothCurveSteps?: number) {
         this.svgText = svgText;
@@ -199,10 +200,16 @@ class SVGParser {
 
         let tagEnd = this.svgText.indexOf(">", startPos);
         let tag = this.svgText.substr(startPos, tagEnd + 1);
-        let content = this.svgText.substr(tagEnd + 1, endPos).trim();
+        let content = this.svgText.substr(tagEnd + 1, (endPos-tagEnd)-1).trim();
 
         let x = this.scaleX(this.getAttr(tag, "x"));
         let y = this.scaleY(this.getAttr(tag, "y"));
+        let rule = false
+        if (y == 0 && x == 0) {
+            // Asumme that means no Position.
+            y = this.TextHeight;
+            rule = true;
+        }
         let color = this.colorFromAttr(tag, "fill");
 
         let fontSize = this.getAttr(tag, "font-size");
@@ -223,7 +230,9 @@ class SVGParser {
             }
         }
 
-
+        if (rule) {
+            this.TextHeight += font.charHeight;
+        }
         this.img.print(content, x, y, color, font);
         return endPos + 7;
     }
@@ -277,10 +286,12 @@ class SVGParser {
 
         let prevX = 0;
         let prevY = 0;
+        let prevCX = 0;
+        let prevCY = 0;
         let startX = 0;
         let startY = 0;
         let i = 0;
-
+        let prevCmd = "";
         while (i < tokens.length) {
             let cmd = tokens[i++];
             let isRelative = (cmd >= "a" && cmd <= "z");
@@ -330,6 +341,8 @@ class SVGParser {
                 this.drawCubicBezier(prevX, prevY, x1, y1, x2, y2, x, y, color);
                 prevX = x;
                 prevY = y;
+                prevCX = x2;
+                prevCY = y2;
             }
             else if (cmd == "Q") {
                 let x1 = this.scaleX(parseFloat(tokens[i++]));
@@ -356,12 +369,46 @@ class SVGParser {
                 prevX = x;
                 prevY = y;
             }
+            else if (cmd == "S") {
+                // Determine first control point (x1, y1)
+                let x1: number;
+                let y1: number;
+                if (prevCmd == "C" || prevCmd == "S") {
+                    // Reflect previous control point across current point
+                    x1 = 2 * prevX - prevCX;
+                    y1 = 2 * prevY - prevCY;
+                } else {
+                    // No reflection — use current point
+                    x1 = prevX;
+                    y1 = prevY;
+                }
+
+                // Second control point and end point from tokens
+                let x2 = this.scaleX(parseFloat(tokens[i++]));
+                let y2 = this.scaleY(parseFloat(tokens[i++]));
+                let x = this.scaleX(parseFloat(tokens[i++]));
+                let y = this.scaleY(parseFloat(tokens[i++]));
+
+                // Draw smooth cubic Bezier
+                this.drawCubicBezier(prevX, prevY, x1, y1, x2, y2, x, y, color);
+
+                // Store control point for potential smooth chaining
+                prevCX = x2;
+                prevCY = y2;
+
+                // Update current position and command
+                prevX = x;
+                prevY = y;
+                prevCmd = "S";
+            }
             else {
+                console.log("[PXT-SVG] Unsupported Path Command:" + cmd);
                 // Unsupported command — skip numbers until next letter
                 while (i < tokens.length && !(tokens[i].length == 1 && tokens[i].toUpperCase() >= "A" && tokens[i].toUpperCase() <= "Z")) {
                     i++;
                 }
             }
+            prevCmd = cmd;
         }
 
         return endPos;
